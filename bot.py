@@ -1,0 +1,233 @@
+import time
+from datetime import datetime, timedelta
+import pandas as pd
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from nse_helper import generate_chat_table, process_df, get_excel_buffer, get_sma_custom_excel_buffer
+from sma_helper import run_sma_daily_scanner, run_sma_single_stock_backtest
+import watchlists
+
+try:
+    from nselib import capital_market
+except ImportError:
+    print("nselib is not installed. Please install it using: pip install nselib")
+    import sys
+    sys.exit(1)
+
+BOT_TOKEN = "8858205576:AAF3QFD6rQkmyxAn9OGenaeKxqeJ-rKrZQ4" 
+bot = telebot.TeleBot(BOT_TOKEN)
+
+user_profiles = {}
+user_backtest_data = {} # Temporary storage for ticker names during backtest setup
+
+def get_main_menu_markup():
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("📝 Update Profile", callback_data="update_profile"))
+    markup.row(InlineKeyboardButton("📈 NSE Bulkdeal", callback_data="show_bulkdeal_menu"))
+    markup.row(InlineKeyboardButton("🚥 Strategy: SMAs", callback_data="show_sma_menu"))
+    markup.row(InlineKeyboardButton("📋 Watchlists", callback_data="show_watchlist_menu"))
+    return markup
+
+def get_bulkdeal_menu_markup():
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("📊 NSE Bulkdeal (30 Days)", callback_data="run_30_days"))
+    markup.row(InlineKeyboardButton("🔍 Client 10-Year History", callback_data="run_10_years"))
+    markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main"))
+    return markup
+
+def get_sma_menu_markup():
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("📡 Daily Scanner", callback_data="run_sma_scanner"))
+    markup.row(InlineKeyboardButton("🔬 Single Stock Backtest", callback_data="prompt_sma_backtest"))
+    markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main"))
+    return markup
+
+def get_watchlist_menu_markup():
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("V40 Companies", callback_data="list_v40"))
+    markup.row(InlineKeyboardButton("V40 Next Companies", callback_data="list_v40n"))
+    markup.row(InlineKeyboardButton("V50 Companies", callback_data="list_v50"))
+    markup.row(InlineKeyboardButton("V200 Companies", callback_data="list_v200"))
+    markup.row(InlineKeyboardButton("High Dividends", callback_data="list_highdiv"))
+    markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main"))
+    return markup
+
+@bot.message_handler(commands=['start', 'menu'])
+def send_welcome(message):
+    chat_id = message.chat.id
+    user_name = user_profiles.get(chat_id, "Trader")
+    bot.send_message(chat_id, f"Hello, {user_name}! 👋\n\nWelcome to the **Strategy Stocks Bot**.\nPlease select an option:", reply_markup=get_main_menu_markup(), parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    chat_id = call.message.chat.id
+    
+    if call.data == "update_profile":
+        msg = bot.send_message(chat_id, "Please type your name:")
+        bot.register_next_step_handler(msg, save_user_profile)
+        
+    elif call.data == "show_bulkdeal_menu":
+        bot.edit_message_text("📈 **NSE Bulkdeal Tracker**\nPlease select an option:", chat_id=chat_id, message_id=call.message.message_id, reply_markup=get_bulkdeal_menu_markup(), parse_mode="Markdown")
+        
+    elif call.data == "show_sma_menu":
+        bot.edit_message_text("🚥 **SMA Reversal Strategy System**\nPlease select an option:", chat_id=chat_id, message_id=call.message.message_id, reply_markup=get_sma_menu_markup(), parse_mode="Markdown")
+        
+    elif call.data == "show_watchlist_menu":
+        bot.edit_message_text("📋 **Market Watchlists**\nPlease select a category to view:", chat_id=chat_id, message_id=call.message.message_id, reply_markup=get_watchlist_menu_markup(), parse_mode="Markdown")
+        
+    elif call.data == "back_to_main":
+        bot.edit_message_text(f"Hello, {user_profiles.get(chat_id, 'Trader')}! 👋\nPlease select an option:", chat_id=chat_id, message_id=call.message.message_id, reply_markup=get_main_menu_markup(), parse_mode="Markdown")
+        
+    elif call.data == "run_30_days":
+        bot.send_message(chat_id, "Fetching 30-day market deals from NSE...")
+        run_nse_30_days(chat_id)
+        
+    elif call.data == "run_10_years":
+        msg = bot.send_message(chat_id, "Please enter the Client Name to search.\n(Suggestion: `VSPARTANS`)", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, run_client_10_years)
+        
+    elif call.data == "run_sma_scanner":
+        bot.send_message(chat_id, "Running SMA Daily Scanner across watchlist...")
+        execute_sma_scanner(chat_id)
+        
+    elif call.data == "prompt_sma_backtest":
+        msg = bot.send_message(chat_id, "Please enter the Ticker Name for SMA Backtest.\n(Example: `ACC`)", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, ask_years_for_backtest)
+        
+    elif call.data.startswith("bt_years_"):
+        years = int(call.data.split("_")[2])
+        execute_sma_backtest_final(call.message, years)
+        
+    elif call.data.startswith("list_"):
+        list_map = {
+            "list_v40": ("V40 Companies", watchlists.V40),
+            "list_v40n": ("V40 Next Companies", watchlists.V40N),
+            "list_v50": ("V50 Companies", watchlists.V50),
+            "list_v200": ("V200 Companies", watchlists.V200),
+            "list_highdiv": ("High Dividends Companies", watchlists.HIGH_DIV)
+        }
+        title, tickers = list_map[call.data]
+        formatted_list = ", ".join(tickers)
+        bot.send_message(chat_id, f"📋 **{title}**\n\n`{formatted_list}`", parse_mode="Markdown")
+
+def save_user_profile(message):
+    chat_id = message.chat.id
+    name = message.text.strip()
+    user_profiles[chat_id] = name
+    bot.send_message(chat_id, f"Profile updated! I will call you {name}. Type /start to see the main menu.")
+
+def run_nse_30_days(chat_id):
+    try:
+        days = 30
+        today = datetime.now()
+        from_date, to_date = (today - timedelta(days=days)).strftime("%d-%m-%Y"), today.strftime("%d-%m-%Y")
+        try: df_bulk = process_df(capital_market.bulk_deal_data(from_date=from_date, to_date=to_date))
+        except: df_bulk = pd.DataFrame()
+        try: df_block = process_df(capital_market.block_deals_data(from_date=from_date, to_date=to_date))
+        except: df_block = pd.DataFrame()
+
+        if df_bulk.empty and df_block.empty:
+            bot.send_message(chat_id, "No data fetched from NSE for the last 30 days.")
+            return
+
+        if not df_bulk.empty: bot.send_message(chat_id, generate_chat_table(df_bulk, title="Bulk Deals Preview"), parse_mode="Markdown")
+        if not df_block.empty: bot.send_message(chat_id, generate_chat_table(df_block, title="Block Deals Preview"), parse_mode="Markdown")
+
+        excel_buffer = get_excel_buffer(df_bulk, df_block, "NSE", f"Last {days} Days as of {today.strftime('%d-%b-%Y')}")
+        excel_buffer.name = f"NSE_Market_Deals_Last_{days}_Days.xlsx"
+        bot.send_document(chat_id, document=excel_buffer, caption="Here is your complete 30-Day NSE Deals Excel Report.")
+    except Exception as e:
+        bot.send_message(chat_id, f"An error occurred: {e}")
+
+def run_client_10_years(message):
+    chat_id = message.chat.id
+    client_name = message.text.strip()
+    if not client_name: return bot.send_message(chat_id, "Invalid name provided.")
+        
+    status_msg = bot.send_message(chat_id, f"Searching NSE database (2016-2026) for '{client_name.upper()}'...")
+    try:
+        today = datetime.now()
+        all_bulk, all_block = [], []
+        
+        for i in range(10):
+            from_str, to_str = (today - timedelta(days=(i + 1) * 365)).strftime("%d-%m-%Y"), (today - timedelta(days=i * 365)).strftime("%d-%m-%Y")
+            bot.edit_message_text(f"Searching Year {i+1}/10 ({from_str} to {to_str})...", chat_id=chat_id, message_id=status_msg.message_id)
+            try:
+                df_b = capital_market.bulk_deal_data(from_date=from_str, to_date=to_str)
+                if not df_b.empty:
+                    filtered = df_b[df_b['ClientName'].astype(str).str.contains(client_name, case=False, na=False)]
+                    if not filtered.empty: all_bulk.append(filtered)
+            except: pass
+            try:
+                df_bl = capital_market.block_deals_data(from_date=from_str, to_date=to_str)
+                if not df_bl.empty:
+                    filtered = df_bl[df_bl['ClientName'].astype(str).str.contains(client_name, case=False, na=False)]
+                    if not filtered.empty: all_block.append(filtered)
+            except: pass
+            time.sleep(0.3)
+            
+        df_bulk_merged = process_df(pd.concat(all_bulk, ignore_index=True) if all_bulk else pd.DataFrame())
+        df_block_merged = process_df(pd.concat(all_block, ignore_index=True) if all_block else pd.DataFrame())
+        
+        if df_bulk_merged.empty and df_block_merged.empty: return bot.send_message(chat_id, f"No historical data found for client: '{client_name}'.")
+        if not df_bulk_merged.empty: bot.send_message(chat_id, generate_chat_table(df_bulk_merged, title=f"Client '{client_name.upper()}' Bulk Deals"), parse_mode="Markdown")
+        if not df_block_merged.empty: bot.send_message(chat_id, generate_chat_table(df_block_merged, title=f"Client '{client_name.upper()}' Block Deals"), parse_mode="Markdown")
+            
+        excel_buffer = get_excel_buffer(df_bulk_merged, df_block_merged, f"Client: {client_name.upper()}", "10 Year History")
+        excel_buffer.name = f"Client_History_{client_name.upper()}.xlsx"
+        bot.send_document(chat_id, document=excel_buffer, caption=f"Full 10-Year Excel report for {client_name.upper()}.")
+    except Exception as e:
+        bot.send_message(chat_id, f"An error occurred: {e}")
+
+def execute_sma_scanner(chat_id):
+    try:
+        bot.send_message(chat_id, "Processing all watchlists... This may take a minute.")
+        df_buys, df_sells, df_holdings = run_sma_daily_scanner()
+        
+        if df_buys.empty and df_sells.empty and df_holdings.empty: return bot.send_message(chat_id, "No SMA signals or active holdings found today.")
+        if not df_buys.empty: bot.send_message(chat_id, generate_chat_table(df_buys, title="🟢 SMA Buy Signals", cols_to_show=['Ticker', 'Close Price']), parse_mode="Markdown")
+        if not df_holdings.empty: bot.send_message(chat_id, generate_chat_table(df_holdings, title="💼 Active Holdings", cols_to_show=['Ticker', 'Days Held', 'PnL (%)']), parse_mode="Markdown")
+
+        excel_data = {"New Buys": df_buys, "New Sells": df_sells, "Current Active Setups": df_holdings}
+        excel_buffer = get_sma_custom_excel_buffer(excel_data)
+        excel_buffer.name = "SMA_Daily_Scanner_Results.xlsx"
+        bot.send_document(chat_id, document=excel_buffer, caption="Here is your detailed SMA Scanner Report (with links and PnL).")
+    except Exception as e:
+        bot.send_message(chat_id, f"Scanner error: {e}")
+
+def ask_years_for_backtest(message):
+    chat_id = message.chat.id
+    ticker = message.text.strip().upper()
+    user_backtest_data[chat_id] = ticker # Save the ticker for the next step
+    
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("5 Years", callback_data="bt_years_5"), InlineKeyboardButton("10 Years", callback_data="bt_years_10"), InlineKeyboardButton("15 Years", callback_data="bt_years_15"))
+    markup.row(InlineKeyboardButton("20 Years", callback_data="bt_years_20"), InlineKeyboardButton("50 Years", callback_data="bt_years_50"))
+    
+    bot.send_message(chat_id, f"Ticker `{ticker}` saved. How many years of history do you want to backtest?", reply_markup=markup, parse_mode="Markdown")
+
+def execute_sma_backtest_final(message, years):
+    chat_id = message.chat.id
+    ticker = user_backtest_data.get(chat_id)
+    
+    if not ticker:
+        bot.send_message(chat_id, "Session expired. Please start the backtest again.")
+        return
+        
+    status_msg = bot.send_message(chat_id, f"Downloading data & executing SMA backtest for `{ticker}` ({years} Years)...", parse_mode="Markdown")
+    try:
+        df_trades = run_sma_single_stock_backtest(ticker, period_years=years)
+        if df_trades.empty: return bot.edit_message_text(f"No completed trades found for `{ticker}` in {years} years.", chat_id=chat_id, message_id=status_msg.message_id)
+
+        bot.send_message(chat_id, generate_chat_table(df_trades, title=f"Backtest: {ticker} ({years}Y)", cols_to_show=['Ticker', 'Entry Date', 'PnL (%)']), parse_mode="Markdown")
+        excel_buffer = get_sma_custom_excel_buffer({f"{ticker} Trades": df_trades})
+        excel_buffer.name = f"SMA_Backtest_{ticker}_{years}Y.xlsx"
+        bot.send_document(chat_id, document=excel_buffer, caption=f"Here is all executed trade history for {ticker} ({years} Years).")
+    except Exception as e:
+        bot.send_message(chat_id, f"Backtest error: {e}")
+
+from keep_alive import keep_alive
+keep_alive()
+
+print("Bot is polling...")
+bot.infinity_polling()

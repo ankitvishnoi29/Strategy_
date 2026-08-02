@@ -1,0 +1,7 @@
+pyTelegramBotAPI
+pandas
+openpyxl
+nselib
+yfinance
+requests
+Flask
