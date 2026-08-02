@@ -20,6 +20,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_profiles = {}
 user_backtest_data = {} # Temporary storage for ticker names during backtest setup
 
+# --- MENU MARKUPS ---
 def get_main_menu_markup():
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("📝 Update Profile", callback_data="update_profile"))
@@ -52,12 +53,87 @@ def get_watchlist_menu_markup():
     markup.row(InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main"))
     return markup
 
-@bot.message_handler(commands=['start', 'menu'])
-def send_welcome(message):
+# --- COMMAND HANDLERS ---
+@bot.message_handler(commands=['start'])
+def cmd_start(message):
+    chat_id = message.chat.id
+    user_name = user_profiles.get(chat_id, message.from_user.first_name or "Trader")
+    welcome_text = (
+        f"Hello {user_name}! 👋\n\n"
+        "Welcome to the **StockOpp Premium Terminal**.\n"
+        "Link your account to receive exclusive daily alerts, V40 breakouts, and custom strategy scans directly on Telegram.\n\n"
+        "Click **MENU** below or use the buttons to navigate."
+    )
+    bot.send_message(chat_id, welcome_text, reply_markup=get_main_menu_markup(), parse_mode="Markdown")
+
+@bot.message_handler(commands=['menu'])
+def cmd_menu(message):
     chat_id = message.chat.id
     user_name = user_profiles.get(chat_id, "Trader")
-    bot.send_message(chat_id, f"Hello, {user_name}! 👋\n\nWelcome to the **Strategy Stocks Bot**.\nPlease select an option:", reply_markup=get_main_menu_markup(), parse_mode="Markdown")
+    bot.send_message(chat_id, f"Hello, {user_name}! 👋\nPlease select an option:", reply_markup=get_main_menu_markup(), parse_mode="Markdown")
 
+@bot.message_handler(commands=['about'])
+def cmd_about(message):
+    chat_id = message.chat.id
+    about_text = (
+        "🤖 **About StockOpp Premium Terminal**\n\n"
+        "The StockOpp Premium Terminal is an advanced market intelligence assistant designed to deliver fast, "
+        "accurate, and personalized trading insights directly to your Telegram account.\n\n"
+        "* **Exclusive Daily Alerts**: Receive automated daily buy and sell alerts for your portfolio delivered precisely at 7:00 PM IST.\n"
+        "* **Diverse Strategy Scans**: Track specialized technical setups and breakouts across popular categories like V40, V40 Next, and V200.\n"
+        "* **Advanced Indicator Support**: Monitor custom strategy alerts utilizing V20, Simple Moving Average (SMA), and Envelope strategies.\n"
+        "* **Custom Stock Tracking**: Personalize your terminal experience by configuring custom alerts for your own preferred watchlist of stocks."
+    )
+    bot.send_message(chat_id, about_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['help'])
+def cmd_help(message):
+    chat_id = message.chat.id
+    help_text = (
+        "📖 **Help & Instructions**\n\n"
+        "Here is how you can use the bot:\n"
+        "• /start - Open the main interactive terminal menu.\n"
+        "• /menu - Open main menu options.\n"
+        "• /about - Learn more about the bot's features.\n"
+        "• /settings - Customize your bot preferences.\n"
+        "• /owner - Get contact information for support.\n"
+        "• /vspartans - Instantly fetch 10-year trade history for VSPARTANS."
+    )
+    bot.send_message(chat_id, help_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['settings'])
+def cmd_settings(message):
+    chat_id = message.chat.id
+    settings_text = (
+        "⚙️ **Bot Settings**\n\n"
+        "Manage your terminal configurations:\n"
+        "• **Alert Timing**: 7:00 PM IST (Default)\n"
+        "• **Active Strategy**: SMA & V40 Breakouts\n"
+        "• **Notifications**: Enabled"
+    )
+    bot.send_message(chat_id, settings_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['owner'])
+def cmd_owner(message):
+    chat_id = message.chat.id
+    owner_text = (
+        "👤 **Owner & Support**\n\n"
+        "This bot is managed and operated by the StockOpp Team / Ankit.\n"
+        "For business inquiries or technical support, please contact the owner directly:\n\n"
+        "💬 Admin: `@Ankit209ee`"
+    )
+    bot.send_message(chat_id, owner_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['vspartans'])
+def cmd_vspartans(message):
+    """Direct command to fetch 10-year history for VSPARTANS instantly without menus"""
+    chat_id = message.chat.id
+    dummy_msg = message
+    dummy_msg.text = "VSPARTANS"
+    run_client_10_years(dummy_msg)
+
+
+# --- CALLBACK QUERY HANDLER ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
     chat_id = call.message.chat.id
@@ -110,6 +186,8 @@ def handle_query(call):
         formatted_list = ", ".join(tickers)
         bot.send_message(chat_id, f"📋 **{title}**\n\n`{formatted_list}`", parse_mode="Markdown")
 
+
+# --- CORE FUNCTIONALITY LOGIC ---
 def save_user_profile(message):
     chat_id = message.chat.id
     name = message.text.strip()
@@ -198,7 +276,7 @@ def execute_sma_scanner(chat_id):
 def ask_years_for_backtest(message):
     chat_id = message.chat.id
     ticker = message.text.strip().upper()
-    user_backtest_data[chat_id] = ticker # Save the ticker for the next step
+    user_backtest_data[chat_id] = ticker
     
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("5 Years", callback_data="bt_years_5"), InlineKeyboardButton("10 Years", callback_data="bt_years_10"), InlineKeyboardButton("15 Years", callback_data="bt_years_15"))
@@ -225,9 +303,6 @@ def execute_sma_backtest_final(message, years):
         bot.send_document(chat_id, document=excel_buffer, caption=f"Here is all executed trade history for {ticker} ({years} Years).")
     except Exception as e:
         bot.send_message(chat_id, f"Backtest error: {e}")
-
-from keep_alive import keep_alive
-keep_alive()
 
 print("Bot is polling...")
 bot.infinity_polling()
