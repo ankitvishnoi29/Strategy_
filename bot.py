@@ -303,5 +303,9 @@ def execute_sma_backtest_final(message, years):
         bot.send_document(chat_id, document=excel_buffer, caption=f"Here is all executed trade history for {ticker} ({years} Years).")
     except Exception as e:
         bot.send_message(chat_id, f"Backtest error: {e}")
+from keep_alive import keep_alive
+keep_alive()
+
 print("Bot is polling...")
 bot.infinity_polling()
+
