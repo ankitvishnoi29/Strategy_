@@ -99,7 +99,13 @@ def get_excel_buffer(df_bulk, df_block, title_prefix, sub_title):
 def get_sma_custom_excel_buffer(df_dict):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
+    
+    # Styling mapped to Streamlit app references
     header_fill = PatternFill(start_color="111827", end_color="111827", fill_type="solid")
+    zebra_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
+    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    thin_border = Border(left=Side(style='thin', color='E0E0E0'), right=Side(style='thin', color='E0E0E0'), top=Side(style='thin', color='E0E0E0'), bottom=Side(style='thin', color='E0E0E0'))
+    
     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
     data_font = Font(name="Segoe UI", size=10, color="1F2937")
     profit_font = Font(name="Segoe UI", size=10, bold=True, color="00C04B")
@@ -109,28 +115,41 @@ def get_sma_custom_excel_buffer(df_dict):
     for sheet_name, df in df_dict.items():
         if df.empty: continue
         ws = wb.create_sheet(sheet_name)
+        ws.views.sheetView[0].showGridLines = False
         headers = list(df.columns)
+        
+        # Headers
         for col_idx, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=str(h))
-            cell.font, cell.fill, cell.alignment = header_font, header_fill, Alignment(horizontal="center")
+            cell.font, cell.fill, cell.alignment = header_font, header_fill, Alignment(horizontal="center", vertical="center")
+            cell.border = thin_border
             
+        # Data Rows
         for row_idx, row in enumerate(df.itertuples(index=False), 2):
+            row_fill = zebra_fill if row_idx % 2 == 0 else white_fill
             for col_idx, val in enumerate(row, 1):
                 col_name = headers[col_idx-1]
                 cell = ws.cell(row=row_idx, column=col_idx)
+                cell.fill = row_fill
+                cell.border = thin_border
+                
                 if col_name in ["Screener", "TradingView"]:
                     cell.value, cell.hyperlink, cell.font, cell.alignment = col_name, val, link_font, Alignment(horizontal="center")
                 elif col_name == "PnL (%)":
                     cell.value = val / 100 if isinstance(val, (int, float)) else val
-                    cell.number_format = '+0.00%;-0.00%'
+                    cell.number_format = '+0.00%;-0.00%;0.00%'
                     if isinstance(val, (int, float)): cell.font = profit_font if val > 0 else loss_font
                     cell.alignment = Alignment(horizontal="right")
-                elif "Price" in col_name:
-                    cell.value, cell.number_format, cell.font = val, '#,##0.00', data_font
+                elif any(keyword in col_name for keyword in ["Price", "Value", "Capital"]):
+                    cell.value, cell.number_format, cell.font = val, '₹#,##0.00', data_font
+                    cell.alignment = Alignment(horizontal="right")
                 else:
                     cell.value, cell.font, cell.alignment = val, data_font, Alignment(horizontal="center" if "Date" in col_name or "Days" in col_name else "left")
 
-        for col in ws.columns: ws.column_dimensions[get_column_letter(col[0].column)].width = 16
+        # Column Sizing
+        for col in ws.columns: 
+            ws.column_dimensions[get_column_letter(col[0].column)].width = 16
+            
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
