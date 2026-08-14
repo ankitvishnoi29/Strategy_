@@ -16,7 +16,7 @@ except ImportError:
     import sys
     sys.exit(1)
 
-BOT_TOKEN = "8858205576:AAF3QFD6rQkmyxAn9OGenaeKxqeJ-rKrZQ4" 
+BOT_TOKEN = "8876447777:AAH5kTvJG8iOqUS32U2v7dI48FmC3c__4eA" 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # --- USER DATA MANAGEMENT ---
