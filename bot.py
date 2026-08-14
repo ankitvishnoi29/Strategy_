@@ -157,7 +157,7 @@ def cmd_owner(message):
         "👤 **Owner & Support**\n\n"
         "This bot is managed and operated by the StockOpp Team / Ankit.\n"
         "For business inquiries or technical support, please contact the owner directly:\n\n"
-        "💬 Admin: `@Ankit209ee`"
+        "💬 Admin: `@ankitvishnoi01`"
     )
     bot.send_message(message.chat.id, owner_text, parse_mode="Markdown")
 
