@@ -163,7 +163,7 @@ def cmd_owner(message):
 
 @bot.message_handler(commands=['users'])
 def cmd_users(message):
-    if message.from_user.username == "Ankit209ee":
+    if message.from_user.username == "ankitvishnoi01":
         if not user_profiles:
             bot.send_message(message.chat.id, "👥 **No registered users found.**")
             return
