@@ -299,6 +299,28 @@ def save_user_profile(message):
     user_profiles[chat_id_str] = name
     save_users(user_profiles)
     bot.send_message(message.chat.id, f"Profile updated! I will call you {name}. Type /start to see the main menu.")
+@bot.message_handler(commands=['users'])
+def cmd_users(message):
+    if message.from_user.username == "ankitvishnoi01":
+        if not user_profiles:
+            bot.send_message(message.chat.id, "👥 **No registered users found.**", parse_mode="Markdown")
+            return
+            
+        df_users = pd.DataFrame(list(user_profiles.items()), columns=['Chat ID', 'Name'])
+        table_text = f"👥 **Registered Users ({len(df_users)} total):**\n```\n{df_users.to_string(index=False)}\n```"
+        bot.send_message(message.chat.id, table_text, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "⛔ Unauthorized access.")
+
+@bot.message_handler(commands=['vspartans'])
+def cmd_vspartans(message):
+    """Direct command to fetch 10-year history for VSPARTANS instantly without menus"""
+    if message.from_user.username == "ankitvishnoi01":
+        dummy_msg = message
+        dummy_msg.text = "VSPARTANS"
+        run_client_10_years(dummy_msg)
+    else:
+        bot.send_message(message.chat.id, "⛔ Unauthorized access. This command is restricted.")
 
 def execute_strategy_daily_scan(chat_id, strat_id, wl_name, ticker_list):
     """Executes the daily scanner for any strategy and selected watchlist"""
