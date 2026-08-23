@@ -1,156 +1,171 @@
-import io
-import time
-from datetime import datetime
 import pandas as pd
-import openpyxl
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
+import yfinance as yf
+from datetime import datetime
+import watchlists
 
-def generate_chat_table(df, title="Deals Preview", top_n=5, cols_to_show=None):
-    if df.empty: return ""
-    cols = cols_to_show if cols_to_show else ['Symbol', 'Buy/Sell', 'QuantityTraded', 'TradePrice/Wght.Avg.Price']
-    existing_cols = [c for c in cols if c in df.columns]
+def get_category_tags(ticker):
+    tags = []
+    clean = ticker.replace('.NS', '')
     
-    preview_df = df[existing_cols].head(top_n).copy()
-    if 'QuantityTraded' in preview_df.columns:
-        preview_df['QuantityTraded'] = preview_df['QuantityTraded'].apply(lambda x: f"{x:,}")
-    if 'TradePrice/Wght.Avg.Price' in preview_df.columns:
-        preview_df['TradePrice/Wght.Avg.Price'] = preview_df['TradePrice/Wght.Avg.Price'].apply(lambda x: f"₹{x:,.2f}")
+    # Safely check against watchlists using getattr in case a list is missing
+    if clean in getattr(watchlists, 'V40', []): tags.append("V40")
+    if clean in getattr(watchlists, 'V40N', []): tags.append("V40Next")
+    if clean in getattr(watchlists, 'V200', []): tags.append("V200")
+    if clean in getattr(watchlists, 'V50', []): tags.append("V50")
+    if clean in getattr(watchlists, 'HIGH_DIV', []): tags.append("HighDiv")
+    if clean in getattr(watchlists, 'MINE', []): tags.append("Mine")
+    
+    return ", ".join(tags) if tags else "-"
+
+def get_screener_url(ticker):
+    return f"https://www.screener.in/company/{ticker.replace('.NS', '')}/consolidated/"
+
+def get_tv_url(ticker):
+    return f"https://in.tradingview.com/chart/?symbol=NSE:{ticker.replace('.NS', '')}"
+
+def fetch_stock_sma_data(ticker, period_years=3):
+    symbol = f"{ticker.upper().strip()}.NS" if not ticker.endswith(".NS") else ticker.upper().strip()
+    try:
+        # Fetch data quietly
+        df = yf.download(symbol, period=f"{period_years}y", progress=False, ignore_tz=True)
         
-    col_rename = {'Symbol': 'Symbol', 'Ticker': 'Ticker', 'Buy/Sell': 'Type', 'QuantityTraded': 'Qty', 'TradePrice/Wght.Avg.Price': 'Price', 'Entry Price': 'Entry', 'Exit Price': 'Exit', 'PnL (%)': 'PnL%'}
-    preview_df.rename(columns=col_rename, inplace=True)
-    return f"📊 *{title} (Top {len(preview_df)} Records)*\n```\n{preview_df.to_string(index=False)}\n```"
-
-def format_excel_sheet(ws, df_sheet, title_text, default_days_or_info):
-    font_family = "Segoe UI"
-    title_font = Font(name=font_family, size=15, bold=True, color="1B365D")
-    header_font = Font(name=font_family, size=11, bold=True, color="FFFFFF")
-    data_font = Font(name=font_family, size=10, color="333333")
-    
-    header_fill = PatternFill(start_color="1B365D", end_color="1B365D", fill_type="solid")
-    zebra_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
-    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-    thin_border = Border(left=Side(style='thin', color='E0E0E0'), right=Side(style='thin', color='E0E0E0'), top=Side(style='thin', color='E0E0E0'), bottom=Side(style='thin', color='E0E0E0'))
-
-    ws.views.sheetView[0].showGridLines = True
-    ws.merge_cells("A1:I1")
-    title_cell = ws["A1"]
-    title_cell.value = f"{title_text} ({default_days_or_info})"
-    title_cell.font = title_font
-    title_cell.alignment = Alignment(horizontal="left", vertical="center")
-    ws.row_dimensions[1].height = 40
-    ws.row_dimensions[2].height = 10
-    
-    for col_idx, h in enumerate(list(df_sheet.columns), 1):
-        cell = ws.cell(row=3, column=col_idx)
-        cell.value = str(h)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = thin_border
-        
-    ws.row_dimensions[3].height = 25
-    row_idx = 4
-    for _, row in df_sheet.iterrows():
-        ws.row_dimensions[row_idx].height = 20
-        row_fill = zebra_fill if row_idx % 2 == 0 else white_fill
-        for col_idx, val in enumerate(row, 1):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            cell.value = str(val) if not isinstance(val, (int, float)) else val
-            cell.font = data_font
-            cell.border = thin_border
-            cell.fill = row_fill
-            cell.alignment = Alignment(horizontal="left" if isinstance(val, str) else "right", vertical="center")
-        row_idx += 1
-        
-    for col in ws.columns:
-        ws.column_dimensions[get_column_letter(col[0].column)].width = 18
-
-def process_df(df):
-    if df.empty: return df
-    df.columns = [c.strip() for c in df.columns]
-    
-    def parse_date(d_str):
-        for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d"):
-            try: return datetime.strptime(str(d_str).strip(), fmt)
-            except ValueError: continue
-        return str(d_str).strip()
-        
-    df['ParsedDate'] = df['Date'].apply(parse_date)
-    df = df.sort_values(by=['ParsedDate', 'Symbol'], ascending=[False, True]) if pd.api.types.is_datetime64_any_dtype(df['ParsedDate']) else df.sort_values(by=['Date', 'Symbol'], ascending=[False, True])
-    if pd.api.types.is_datetime64_any_dtype(df['ParsedDate']): df['Date'] = df['ParsedDate'].dt.strftime('%d-%b-%y')
-    df = df.drop(columns=['ParsedDate'])
-    df['QuantityTraded'] = pd.to_numeric(df['QuantityTraded'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
-    df['TradePrice/Wght.Avg.Price'] = pd.to_numeric(df['TradePrice/Wght.Avg.Price'].astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
-    df['TradeValue_INR'] = df['QuantityTraded'] * df['TradePrice/Wght.Avg.Price']
-    df['Buy/Sell'] = df['Buy/Sell'].astype(str).str.strip().str.upper()
-    return df
-
-def get_excel_buffer(df_bulk, df_block, title_prefix, sub_title):
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active) 
-    if not df_bulk.empty: format_excel_sheet(wb.create_sheet("Bulk Deals"), df_bulk, f"{title_prefix} Bulk Deals", sub_title)
-    if not df_block.empty: format_excel_sheet(wb.create_sheet("Block Deals"), df_block, f"{title_prefix} Block Deals", sub_title)
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-    return buffer
-
-def get_sma_custom_excel_buffer(df_dict):
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active)
-    
-    # Styling mapped to Streamlit app references
-    header_fill = PatternFill(start_color="111827", end_color="111827", fill_type="solid")
-    zebra_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
-    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-    thin_border = Border(left=Side(style='thin', color='E0E0E0'), right=Side(style='thin', color='E0E0E0'), top=Side(style='thin', color='E0E0E0'), bottom=Side(style='thin', color='E0E0E0'))
-    
-    header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-    data_font = Font(name="Segoe UI", size=10, color="1F2937")
-    profit_font = Font(name="Segoe UI", size=10, bold=True, color="00C04B")
-    loss_font = Font(name="Segoe UI", size=10, bold=True, color="FF3131")
-    link_font = Font(name="Segoe UI", size=10, color="3B82F6", underline="single")
-
-    for sheet_name, df in df_dict.items():
-        if df.empty: continue
-        ws = wb.create_sheet(sheet_name)
-        ws.views.sheetView[0].showGridLines = False
-        headers = list(df.columns)
-        
-        # Headers
-        for col_idx, h in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx, value=str(h))
-            cell.font, cell.fill, cell.alignment = header_font, header_fill, Alignment(horizontal="center", vertical="center")
-            cell.border = thin_border
+        if df.empty or len(df) < 200:
+            return None
             
-        # Data Rows
-        for row_idx, row in enumerate(df.itertuples(index=False), 2):
-            row_fill = zebra_fill if row_idx % 2 == 0 else white_fill
-            for col_idx, val in enumerate(row, 1):
-                col_name = headers[col_idx-1]
-                cell = ws.cell(row=row_idx, column=col_idx)
-                cell.fill = row_fill
-                cell.border = thin_border
-                
-                if col_name in ["Screener", "TradingView"]:
-                    cell.value, cell.hyperlink, cell.font, cell.alignment = col_name, val, link_font, Alignment(horizontal="center")
-                elif col_name == "PnL (%)":
-                    cell.value = val / 100 if isinstance(val, (int, float)) else val
-                    cell.number_format = '+0.00%;-0.00%;0.00%'
-                    if isinstance(val, (int, float)): cell.font = profit_font if val > 0 else loss_font
-                    cell.alignment = Alignment(horizontal="right")
-                elif any(keyword in col_name for keyword in ["Price", "Value", "Capital"]):
-                    cell.value, cell.number_format, cell.font = val, '₹#,##0.00', data_font
-                    cell.alignment = Alignment(horizontal="right")
-                else:
-                    cell.value, cell.font, cell.alignment = val, data_font, Alignment(horizontal="center" if "Date" in col_name or "Days" in col_name else "left")
-
-        # Column Sizing
-        for col in ws.columns: 
-            ws.column_dimensions[get_column_letter(col[0].column)].width = 16
+        # Handle multi-index columns if yfinance returns them
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
             
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-    return buffer
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        df['SMA_50'] = df['Close'].rolling(window=50).mean()
+        df['SMA_200'] = df['Close'].rolling(window=200).mean()
+        df['Next_Open'] = df['Open'].shift(-1)
+        df['Next_Date'] = df.index.to_series().shift(-1)
+        
+        return df.dropna(subset=['SMA_200'])
+    except Exception as e:
+        print(f"Error fetching data for {symbol}: {e}")
+        return None
+
+def run_sma_daily_scanner(tickers=None):
+    if tickers is None:
+        tickers = getattr(watchlists, 'GLOBAL_WATCHLIST', [])
+        
+    buys, sells, holdings = [], [], []
+    
+    for ticker in tickers:
+        # Standardize the ticker name so `.NS` is handled uniformly
+        clean_ticker = str(ticker).upper().replace('.NS', '')
+        formatted_ticker = f"{clean_ticker}.NS"
+        
+        df = fetch_stock_sma_data(clean_ticker, period_years=2)
+        if df is None or df.empty:
+            continue
+            
+        in_position = False
+        entry_price = 0.0
+        entry_date = None
+        
+        # Simulate past trades to find current status
+        for row in df.itertuples():
+            close = float(row.Close)
+            s20, s50, s200 = float(row.SMA_20), float(row.SMA_50), float(row.SMA_200)
+            next_open, next_date = row.Next_Open, row.Next_Date
+            
+            if pd.isna(next_open): 
+                break
+
+            buy_cond = (s200 > s50) and (s50 > s20) and (s20 > close)
+            sell_cond = (s200 < s50) and (s50 < s20) and (s20 < close)
+
+            if not in_position and buy_cond:
+                in_position = True
+                entry_price = float(next_open)
+                entry_date = pd.to_datetime(next_date)
+            elif in_position and sell_cond and (close > entry_price):
+                in_position = False
+
+        # Evaluate the very last row for today's signals
+        last_row = df.iloc[-1]
+        close = float(last_row['Close'])
+        s20, s50, s200 = float(last_row['SMA_20']), float(last_row['SMA_50']), float(last_row['SMA_200'])
+        
+        # New Buy Signal
+        if (s200 > s50) and (s50 > s20) and (s20 > close):
+            buys.append({
+                "Ticker": formatted_ticker, 
+                "Signal": "BUY TOMORROW OPEN", 
+                "Close Price": round(close, 2)
+            })
+            
+        # New Sell Signal
+        elif in_position and (s200 < s50) and (s50 < s20) and (s20 < close) and (close > entry_price):
+            sells.append({
+                "Ticker": formatted_ticker, 
+                "Signal": "SELL TOMORROW OPEN", 
+                "Close Price": round(close, 2)
+            })
+
+        # Currently Holding
+        if in_position:
+            days_held = (df.index[-1] - entry_date).days
+            pnl_pct = ((close - entry_price) / entry_price) * 100
+            holdings.append({
+                "Ticker": formatted_ticker, 
+                "Category": get_category_tags(clean_ticker),
+                "Screener": get_screener_url(clean_ticker), 
+                "TradingView": get_tv_url(clean_ticker),
+                "Entry Date": entry_date.strftime('%d/%m/%Y'), 
+                "Days Held": days_held,
+                "Entry Price": round(entry_price, 2), 
+                "Current Price": round(close, 2), 
+                "PnL (%)": round(pnl_pct, 2)
+            })
+            
+    return pd.DataFrame(buys), pd.DataFrame(sells), pd.DataFrame(holdings)
+
+def run_sma_single_stock_backtest(ticker, period_years=5):
+    df = fetch_stock_sma_data(ticker, period_years=period_years)
+    if df is None or df.empty: 
+        return pd.DataFrame()
+        
+    in_position = False
+    entry_price = 0.0
+    entry_date = None
+    historical_trades = []
+
+    for row in df.itertuples():
+        close = float(row.Close)
+        s20, s50, s200 = float(row.SMA_20), float(row.SMA_50), float(row.SMA_200)
+        next_open, next_date = row.Next_Open, row.Next_Date
+        
+        if pd.isna(next_open): 
+            continue
+
+        buy_cond = (s200 > s50) and (s50 > s20) and (s20 > close)
+        sell_cond = (s200 < s50) and (s50 < s20) and (s20 < close)
+
+        if not in_position and buy_cond:
+            in_position = True
+            entry_price = float(next_open)
+            entry_date = pd.to_datetime(next_date)
+        elif in_position and sell_cond and (close > entry_price):
+            exit_price = float(next_open)
+            exit_date = pd.to_datetime(next_date)
+            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+            
+            historical_trades.append({
+                "Ticker": f"{ticker.upper()}.NS", 
+                "Category": get_category_tags(ticker),
+                "Screener": get_screener_url(ticker), 
+                "TradingView": get_tv_url(ticker),
+                "Entry Date": entry_date.strftime('%d/%m/%Y'), 
+                "Exit Date": exit_date.strftime('%d/%m/%Y'),
+                "Days Held": (exit_date - entry_date).days, 
+                "Entry Price": round(entry_price, 2),
+                "Exit Price": round(exit_price, 2), 
+                "PnL (%)": round(pnl_pct, 2)
+            })
+            in_position = False
+
+    return pd.DataFrame(historical_trades)
