@@ -177,7 +177,7 @@ def cmd_users(message):
 @bot.message_handler(commands=['vspartans'])
 def cmd_vspartans(message):
     """Direct command to fetch 10-year history for VSPARTANS instantly without menus"""
-    if message.from_user.username == "Ankit209ee":
+    if message.from_user.username == "ankitvishnoi01":
         dummy_msg = message
         dummy_msg.text = "VSPARTANS"
         run_client_10_years(dummy_msg)
